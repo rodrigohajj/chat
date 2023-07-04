@@ -1,0 +1,370 @@
+import React, { useState, useEffect, useRef, useContext } from 'react';
+import Typist from 'react-typist';
+import CreatableSelect from 'react-select/creatable';
+import 'bootstrap/dist/css/bootstrap.min.css';
+import { v4 as uuidv4 } from 'uuid';
+import { CoreContext } from 'context/CoreContext'
+import { ReadCountries } from 'services/location'
+
+export default function AIHelper({ setScreen }) {
+    const { findlanguage, setFilter, language,  } = useContext(CoreContext)
+
+    const products = [
+        {
+            label: "Turkey Breasts",
+            title: "Turkey Breasts",
+            value: "Turkey Breasts",
+        },
+        {
+            label: "Dried whey powder",
+            title: "Dried whey powder",
+            value: "Dried whey powder",
+        },
+        {
+            label: "Water",
+            title: "Water",
+            value: "Water",
+        }
+    ];
+
+    const radiusOptions = [
+        { value: '50', label: '50 miles' },
+        { value: '100', label: '100 miles' }
+    ];
+
+    const certifications = [
+        { value: 'ISO 27001', label: 'ISO 27001 - Information Security' },
+        { value: 'USDA Audit', label: 'USDA Audit' },
+        { value: 'USDA Inspect', label: 'USDA Inspect' }
+    ]
+
+    const [isUserTyping, setIsUserTyping] = useState(false);
+    const [currentQuestion, setCurrentQuestion] = useState();
+    const [selectedOptions, setSelectedOptions] = useState([]);
+    const [filterArray, setFilterArray] = useState([]);
+    const [conversation, setConversation] = useState([]);
+    const [query, setQuery] = useState({});
+    const [isLoading, setIsLoading] = useState(false);
+    const [disableInput, setDisableInput] = useState(false);
+    const [usePastChoices, setUsePastChoices] = useState(false);
+    const [isTyping, setIsTyping] = useState(false); // new state variable
+    const [availableOptions, setAvailableOptions] = useState([]);
+    const [questions, setQuestions] = useState([
+        {
+            text: localStorage.getItem('userPastChoices') === null ? findlanguage().startLocationInitialText : findlanguage().startLocation,
+            options: [],
+            queryKey: 'country',
+            skipMessage: findlanguage().skipLocation
+        }
+    ]);
+
+    const botImageURL = "https://i.pravatar.cc/150?img=56"; // replace with your image url
+    const userImageURL = "https://i.pravatar.cc/150?img=12"; // replace with your image url
+
+    const init = async () => {
+        let countries = []
+        if (language === 'portugues')
+            countries = await ReadCountries().then((resp) =>
+                resp.map((item) => ({
+                    ...item,
+                    label: item.name_pt,
+                    title: item.name,
+                    value: item.iso2,
+                }))
+            )
+        else
+            countries = await ReadCountries().then((resp) =>
+                resp.map((item) => ({
+                    ...item,
+                    label: item.name,
+                    title: item.name,
+                    value: item.iso2,
+                }))
+            )
+
+        setQuestions([
+            {
+                text: localStorage.getItem('userPastChoices') === null ? findlanguage().startLocationInitialText : findlanguage().startLocation,
+                options: countries,
+                queryKey: 'country',
+                skipMessage: findlanguage().skipLocation
+            },
+            {
+                text: findlanguage().findSuppliers + (query.country || []).join(', ') + findlanguage().productLookingFor,
+                options: products,
+                queryKey: 'product',
+                skipMessage: findlanguage().skipProduct
+            },
+            {
+                text: findlanguage().specifyRadius,
+                options: radiusOptions,
+                queryKey: 'radius',
+                skipMessage: findlanguage().skipRadius
+            },
+            {
+                text: findlanguage().specificCertification,
+                options: certifications,
+                queryKey: 'certification',
+                skipMessage: findlanguage().skipCertification
+            },
+            {
+                text: findlanguage().clickResults,
+                options: [],
+                queryKey: null
+            }
+        ])
+    }
+
+    const chatBoxRef = useRef(null);
+
+    const handleSelectChange = (selectedOption, { action }) => {
+        if (action === 'select-option' || action === 'remove-value') {
+            setIsUserTyping(true);
+            setTimeout(() => setIsUserTyping(false), 1000);
+        }
+        setSelectedOptions(selectedOption);
+    };
+
+    const handleNext = () => {
+        setIsTyping(true);
+
+        if (selectedOptions.length > 0) {
+            setQuery(prevState => ({ ...prevState, [questions[currentQuestion].queryKey]: selectedOptions }));
+            const selectedValues = selectedOptions.map(option => option.value);
+            let pastChoices = safeParse(localStorage.getItem('userPastChoices'));
+
+            if (pastChoices) {
+                if (pastChoices[questions[currentQuestion].queryKey]) {
+                    let newChoices = [...pastChoices[questions[currentQuestion].queryKey]];
+
+                    selectedOptions.forEach(option => {
+                        let existingChoiceIndex = newChoices.findIndex(choice => choice.value.value === option.value);
+
+                        if (existingChoiceIndex !== -1) {
+                            newChoices[existingChoiceIndex].count += 1;
+                        } else {
+                            newChoices.push({ value: option, count: 1 });
+                        }
+                    });
+
+                    pastChoices[questions[currentQuestion].queryKey] = newChoices;
+                } else {
+                    pastChoices[questions[currentQuestion].queryKey] = selectedOptions.map(option => ({ value: option, count: 1 }));
+                }
+            } else {
+                pastChoices = { [questions[currentQuestion].queryKey]: selectedOptions.map(option => ({ value: option, count: 1 })) };
+            }
+
+            localStorage.setItem('userPastChoices', JSON.stringify(pastChoices));
+        }
+
+        const userChoice = selectedOptions.length > 0 ? selectedOptions.map(option => option.label).join(', ') : questions[currentQuestion].skipMessage;
+
+        setConversation([...conversation, { text: userChoice, image: userImageURL, sender: 'user' }]);
+        setSelectedOptions([]);
+        setFilterArray(filterArray.concat(userChoice));
+
+        setTimeout(() => {
+            setConversation(prevState => [...prevState, { text: questions[currentQuestion + 1].text, image: botImageURL, sender: 'bot' }]);
+            setCurrentQuestion(prevState => prevState + 1);
+            setIsTyping(false);
+
+            if (currentQuestion + 1 < questions.length) {
+                const pastChoices = safeParse(localStorage.getItem('userPastChoices'));
+                if (pastChoices && pastChoices[questions[currentQuestion + 1].queryKey]) {
+                    const mostSearched = pastChoices[questions[currentQuestion + 1].queryKey].sort((a, b) => b.count - a.count).slice(0, 3).map(choice => choice.value); // get top 3 most searched items
+                    setSelectedOptions(mostSearched);
+                }
+            }
+        }, 500);
+    };
+
+    const handleBack = () => {
+        setIsTyping(true);
+        setTimeout(() => {
+            setConversation(prevState => prevState.slice(0, -2));
+            setSelectedOptions(query[questions[currentQuestion - 1].queryKey] || []);
+            setCurrentQuestion(prevState => prevState - 1);
+            setIsTyping(false);
+
+            if (currentQuestion - 1 >= 0) {
+                let pastChoices = safeParse(localStorage.getItem('userPastChoices'));
+
+                if (pastChoices && pastChoices[questions[currentQuestion - 1].queryKey]) {
+                    const mostSearched = pastChoices[questions[currentQuestion - 1].queryKey].sort((a, b) => b.count - a.count).slice(0, 3).map(choice => choice.value); // get top 3 most searched items
+                    setAvailableOptions(mostSearched);
+                } else {
+                    setAvailableOptions(questions[currentQuestion - 1].options);
+                }
+            }
+        }, 500);
+    };
+
+    const handlePastChoiceResponse = (response, userText) => {
+        // Add user's message to the conversation
+        setConversation(prevState => [...prevState, { text: userText, image: userImageURL, sender: 'user' }]);
+        setDisableInput(false);
+        if (response === 'yes') {
+            setUsePastChoices(true);
+            let pastChoices = safeParse(localStorage.getItem('userPastChoices'));
+            if (pastChoices && pastChoices[questions[0].queryKey]) {
+                const mostSearched = pastChoices[questions[0].queryKey].sort((a, b) => b.count - a.count).slice(0, 3).map(choice => choice.value); // get top 3 most searched items
+                setSelectedOptions(mostSearched);
+            } else {
+                setSelectedOptions(questions[0].options);
+            }
+        }
+        setCurrentQuestion(0);
+        setConversation(prevState => [...prevState, { text: findlanguage().startLocation, image: botImageURL, sender: 'bot' }]);
+    };
+
+    const scrollToBottom = () => {
+        chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight;
+    }
+
+    const safeParse = (data) => {
+        try {
+            return JSON.parse(data) || {};
+        } catch {
+            return {};
+        }
+    };
+
+    useEffect(() => {
+        scrollToBottom();
+    }, [conversation]);
+
+    useEffect(() => {
+        scrollToBottom();
+    }, [questions]);
+
+    useEffect(() => {
+        if (currentQuestion !== undefined && !usePastChoices) {
+            setAvailableOptions(questions[currentQuestion]?.options);
+        } else if (currentQuestion !== undefined && usePastChoices) {
+            const pastChoices = JSON.parse(localStorage.getItem('userPastChoices'));
+            if (pastChoices && pastChoices[questions[currentQuestion].queryKey]) {
+                const mostSearched = pastChoices[questions[currentQuestion].queryKey].sort((a, b) => b.count - a.count).slice(0, 3).map(choice => choice.value); // get top 3 most searched items
+                setAvailableOptions(questions[currentQuestion]?.options);
+            } else {
+                setAvailableOptions(questions[currentQuestion]?.options);
+            }
+        }
+    }, [currentQuestion, usePastChoices]);
+
+    useEffect(async () => {
+        await init()
+        let pastChoices = localStorage.getItem('userPastChoices');
+
+        if (pastChoices) {
+            setIsLoading(true);
+            setDisableInput(true);
+            setTimeout(() => {
+                setConversation([...conversation, { text: "Welcome back! Do you want to use your past choices as suggestions for this session?", image: botImageURL, sender: 'bot' }]);
+                setIsLoading(false);
+            }, 500);
+        } else {
+            setCurrentQuestion(0)
+            setConversation([...conversation, { text: questions[0]?.text, image: botImageURL, sender: 'bot' }]);
+        }
+    }, []);
+
+    const seeResults = () => {
+        setScreen(0)
+        setFilter(query)
+    }
+
+    return (
+        <div className="container">
+            <div className="row justify-content-center">
+                <div className="col-12">
+                    <div className="mt-12">
+                        <div className="card border-0 rounded">
+                            <div className="card-body" ref={chatBoxRef} style={{ overflowY: "auto", height: "500px", scrollbarWidth: "thin", scrollbarColor: "transparent transparent" }}>
+                                {conversation.map((message, index) => {
+                                    return (
+                                        <div key={uuidv4()} className={`d-flex ${message.sender === 'user' ? 'justify-content-end' : 'justify-content-start'} mb-3`}>
+                                            {
+                                                message.sender === 'user' ?
+                                                    <>
+                                                        <div className={`ml-3 mr-3 p-2 rounded-pill bg-primary text-white`}>
+                                                            {message.text}
+                                                        </div>
+                                                        <img src={message.image} alt="Avatar" className="rounded-circle" style={{ height: '50px', width: '50px', marginLeft: '5px' }} />
+                                                    </>
+                                                    :
+                                                    <>
+                                                        <img src={message.image} alt="Avatar" className="rounded-circle" style={{ height: '50px', width: '50px', marginRight: '5px' }} />
+                                                        <div className={`ml-3 mr-3 p-2 rounded-pill bg-light`}>
+                                                            {(index === conversation.length - 1 && message.sender === 'bot') ? <Typist avgTypingDelay={7}>{message.text}</Typist> : message.text}
+                                                        </div>
+                                                    </>
+                                            }
+                                        </div>
+                                    )
+                                })}
+
+                                {isTyping && (
+                                    <div className="d-flex justify-content-start mb-3">
+                                        <img src={botImageURL} alt="Avatar" className="rounded-circle" style={{ height: '50px', width: '50px' }} />
+                                        <div className="ml-3 mr-3 p-2 rounded-pill bg-light">
+                                            <i>{findlanguage().botTyping}</i>
+                                        </div>
+                                    </div>
+                                )}
+                                {isUserTyping && (
+                                    <div className="d-flex justify-content-end mb-3">
+                                        <div className="ml-3 mr-3 p-2 rounded-pill bg-primary text-white">
+                                            <i>Typing...</i>
+                                        </div>
+                                        <img src={userImageURL} alt="Avatar" className="rounded-circle" style={{ height: '50px', width: '50px', marginLeft: '5px' }} />
+                                    </div>
+                                )}
+                            </div>
+                            <div style={{ height: '15px', backgroundColor: '#f5f5f8'}}></div>
+                            <div className="card-footer bg-white border-0" style={{ paddingTop: '20px' }}>
+                                {disableInput ?
+                                    <div className="d-flex justify-content-start">
+                                        <button className="btn btn-success mr-2" onClick={() => handlePastChoiceResponse('yes', 'Yes, I would like to get suggestions.')}>Yes, I would like to get suggestions</button>
+                                        <button className="btn btn-danger ml-2" style={{ marginLeft: '5px' }} onClick={() => handlePastChoiceResponse('no', 'No, I would like to have a clean filter.')}>No, I would like to have a clean filter</button>
+                                    </div>
+                                    :
+                                    <div>
+                                        {currentQuestion < questions.length - 1 && (
+                                            <div>
+                                                <CreatableSelect
+                                                    isMulti
+                                                    isDisabled={isTyping}
+                                                    onChange={handleSelectChange}
+                                                    options={availableOptions}
+                                                    value={selectedOptions}
+                                                    onInputChange={(inputValue, { action }) => {
+                                                        if (action === 'input-change') {
+                                                            setIsUserTyping(true);
+                                                        } else if (action === 'select-option') {
+                                                            setIsUserTyping(true);
+                                                            setTimeout(() => setIsUserTyping(false), 1000);  // Reset the state after 1 second
+                                                        } else {
+                                                            setIsUserTyping(false);
+                                                        }
+                                                    }}
+                                                />
+                                                <div className="d-flex justify-content-start mt-2">
+                                                    <button className="btn btn-primary" disabled={isTyping || selectedOptions.length === 0} onClick={handleNext}>{findlanguage().next}</button>
+                                                    <button className="btn btn-dark" disabled={isTyping || selectedOptions.length !== 0} style={{ marginLeft: '5px' }} onClick={handleNext}>Continue without specifics</button>
+
+                                                    {currentQuestion > 0 && <button className="btn btn-secondary ml-2" style={{ marginLeft: '5px' }} disabled={isTyping} onClick={handleBack}>{findlanguage().back}</button>}
+                                                </div>
+                                            </div>
+                                        )}
+                                        {currentQuestion === questions.length - 1 && <button className="btn btn-success mt-2" onClick={seeResults}>Show results</button>}
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
